@@ -51,23 +51,39 @@ const multiplePosts = catchAsync(async (req, res, next) => {
   if (!Array.isArray(user.posts)) user.posts = [];
 
   const savedFiles = [];
+  const invalidFiles = [];
 
   for (const file of req.files.file) {
-    if (!file.mimetype.startsWith("image/")) continue;
+    if (!file.mimetype.startsWith("image/")) {
+      invalidFiles.push(file.originalname);
+      continue;
+    }
 
-    const relativePath = file.filename;
+    const relativePath = `${file.filename}`;
 
+    // Create post in DB
     const postDoc = await Post_model.create({
       userId: user._id,
       fileUrl: relativePath,
     });
 
+    // Save relativePath in user.posts array
     user.posts.push(relativePath);
 
+    // Respond with _id (so frontend can use backend_id)
     savedFiles.push({
-      id: postDoc._id,
-      file: relativePath, // ✅ IMPORTANT
+      _id: postDoc._id, // <--- key changed to _id
+      file: relativePath,
     });
+  }
+
+  if (!savedFiles.length) {
+    return next(
+      new AppError(
+        `Only image posts allowed. Invalid files: ${invalidFiles.join(", ")}`,
+        400,
+      ),
+    );
   }
 
   await user.save();
@@ -90,23 +106,39 @@ const multipleReels = catchAsync(async (req, res, next) => {
   if (!Array.isArray(user.reels)) user.reels = [];
 
   const savedFiles = [];
+  const invalidFiles = [];
 
   for (const file of req.files.file) {
-    if (!file.mimetype.startsWith("video/")) continue;
+    if (!file.mimetype.startsWith("video/")) {
+      invalidFiles.push(file.originalname);
+      continue;
+    }
 
-    const relativePath = file.filename;
+    const relativePath = `${file.filename}`;
 
+    // Create reel in DB
     const reelDoc = await Reel_model.create({
       userId: user._id,
       fileUrl: relativePath,
     });
 
+    // Save relativePath in user.reels array
     user.reels.push(relativePath);
 
+    // Save both _id and file path in response
     savedFiles.push({
-      id: reelDoc._id,
-      file: relativePath, // ✅ IMPORTANT
+      _id: reelDoc._id, // backend ID
+      file: relativePath,
     });
+  }
+
+  if (!savedFiles.length) {
+    return next(
+      new AppError(
+        `Only video reels allowed. Invalid files: ${invalidFiles.join(", ")}`,
+        400,
+      ),
+    );
   }
 
   await user.save();
@@ -172,7 +204,7 @@ const deletePosts = catchAsync(async (req, res, next) => {
 
   if (!deletedPosts.length && invalidIds.length) {
     return next(
-      new AppError(`No posts fetchted. Invalid or non-post IDs.`, 400)
+      new AppError(`No posts fetchted. Invalid or non-post IDs.`, 400),
     );
   }
 
@@ -239,10 +271,10 @@ const deleteReels = catchAsync(async (req, res, next) => {
     return next(
       new AppError(
         `Only reels fetchted. Invalid or non-reel IDs: ${invalidIds.join(
-          ", "
+          ", ",
         )}`,
-        400
-      )
+        400,
+      ),
     );
   }
 

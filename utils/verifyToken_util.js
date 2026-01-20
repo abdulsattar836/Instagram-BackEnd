@@ -99,7 +99,7 @@ const refreshToken = (model) =>
         $pull: {
           refreshToken,
         },
-      }
+      },
     );
 
     user.refreshToken = undefined;
