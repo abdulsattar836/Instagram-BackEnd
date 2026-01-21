@@ -33,56 +33,37 @@ const generateOTP = () => {
 // route /api/v1/user/signup:
 // @desciption for signup of user and sendotp
 const signUpUser = catchAsync(async (req, res, next) => {
-  // Validate form fields (except file)
-  const { error, value } = signupUserValidation.validate(req.body);
-  if (error) {
-    const errors = error.details.map((el) => el.message);
-    return next(new AppError(errors.join(", "), 400));
-  }
+  const { username, email, password, bio, website } = req.body;
 
-  const { username, email, password, bio, website } = value;
-
-  // Ensure profile picture is uploaded
-  if (!req.file) {
-    return next(new AppError("Profile picture is required", 400));
-  }
+  if (!req.file) return next(new AppError("Profile picture required", 400));
   const profilePic = req.file.filename;
 
-  // Check if user already exists
-  let existingUser = await user_model.findOne({ email });
-
-  // Encrypt password
   const encryptPassword = CryptoJS.AES.encrypt(
     password,
-    process.env.CRYPTO_SEC
+    process.env.CRYPTO_SEC,
   ).toString();
 
-  // Generate OTP with expiration (1 minute)
   const otpData = generateOTP();
-  const expirationTime = Date.now() + 1 * 60 * 1000; // 1 minute
+  const expirationTime = Date.now() + 60 * 1000; // 1 min
   const encryptOtp = CryptoJS.AES.encrypt(
     JSON.stringify({ otp: otpData.otp, expirationTime }),
-    process.env.CRYPTO_SEC
+    process.env.CRYPTO_SEC,
   ).toString();
 
+  let existingUser = await user_model.findOne({ email });
   if (existingUser) {
-    if (existingUser.isVerified) {
-      return next(
-        new AppError("You are already signed up, please log in", 400)
-      );
-    }
+    if (existingUser.isVerified)
+      return next(new AppError("Already signed up, please log in", 400));
 
     // Update unverified user
     existingUser.username = username || existingUser.username;
+    existingUser.password = encryptPassword;
     existingUser.bio = bio || existingUser.bio;
     existingUser.website = website || existingUser.website;
-    existingUser.password = encryptPassword;
-    existingUser.profilePic = profilePic; // always replace with uploaded pic
+    existingUser.profilePic = profilePic;
     existingUser.otp = encryptOtp;
-
     await existingUser.save();
   } else {
-    // Create new user
     await user_model.create({
       username: username || "",
       email,
@@ -94,14 +75,12 @@ const signUpUser = catchAsync(async (req, res, next) => {
     });
   }
 
-  // Send OTP email
   await sendOTPEmail(email, otpData.otp);
-
   return successMessage(
     202,
     res,
-    "OTP sent to your email, please verify your account",
-    null
+    "OTP sent to your email, please verify",
+    null,
   );
 });
 
@@ -109,44 +88,45 @@ const signUpUser = catchAsync(async (req, res, next) => {
 // route /api/v1/user/login:
 // @desciption for login of user
 const loginUser = catchAsync(async (req, res, next) => {
-  const { error, value } = loginUserValidation.validate(req.body);
-  if (error) {
-    const errors = error.details.map((el) => el.message);
-    return next(new AppError(errors, 400));
-  }
-  const userExists = await user_model.findOne({
-    email: value.email,
-  });
-  if (!userExists) {
-    return next(new AppError("User not found", 400));
-  }
-  if (!userExists.isVerified) {
+  const { email, password } = req.body;
+  const userExists = await user_model.findOne({ email });
+  if (!userExists) return next(new AppError("User not found", 400));
+  if (!userExists.isVerified)
     return next(new AppError("Email not verified", 400));
-  }
-  if (userExists.isBlock) {
-    return next(new AppError("User is block", 400));
-  }
-  const hashedPassword = CryptoJS.AES.decrypt(
+  if (userExists.isBlock) return next(new AppError("User is blocked", 400));
+
+  const decrypted = CryptoJS.AES.decrypt(
     userExists.password,
-    process.env.CRYPTO_SEC
+    process.env.CRYPTO_SEC,
   );
-  //console.log(hashedPassword);
-  const realPassword = hashedPassword.toString(CryptoJS.enc.Utf8);
-  if (realPassword !== value.password) {
+  const realPassword = decrypted.toString(CryptoJS.enc.Utf8);
+  if (realPassword !== password)
     return next(new AppError("Incorrect password", 400));
-  }
-  const { refreshToken, accessToken } = generateAccessTokenRefreshToken(
-    userExists._id
+
+  const { accessToken, refreshToken } = generateAccessTokenRefreshToken(
+    userExists._id,
   );
   userExists.refreshToken.push(refreshToken);
   await userExists.save();
-  userExists.refreshToken = undefined;
-  userExists.password = undefined;
-  return successMessage(202, res, "login success", {
-    ...JSON.parse(JSON.stringify(userExists)),
-    accessToken,
-    refreshToken,
+
+  // Set HTTP-only cookies
+  res.cookie("accessToken", accessToken, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "none",
+    maxAge: 15 * 60 * 1000,
   });
+  res.cookie("refreshToken", refreshToken, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "none",
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+  });
+
+  userExists.password = undefined;
+  userExists.refreshToken = undefined;
+
+  return successMessage(200, res, "Login successful", userExists);
 });
 
 // method POST
@@ -170,7 +150,7 @@ const verifyAccount = catchAsync(async (req, res, next) => {
   // Decrypt OTP and check expiration
   const decryptedOtpData = CryptoJS.AES.decrypt(
     user.otp,
-    process.env.CRYPTO_SEC
+    process.env.CRYPTO_SEC,
   ).toString(CryptoJS.enc.Utf8);
   const { otp: storedOtp, expirationTime } = JSON.parse(decryptedOtpData);
 
@@ -221,7 +201,7 @@ const updateProfile = catchAsync(async (req, res, next) => {
   let updatedUser = await user_model.findByIdAndUpdate(
     userId,
     { username, email, bio, website },
-    { new: true } // Return the updated document
+    { new: true }, // Return the updated document
   );
 
   if (!updatedUser) {
@@ -256,7 +236,7 @@ const otpValidation = catchAsync(async (req, res, next) => {
   }
   const decrypted = CryptoJS.AES.decrypt(
     decodeURIComponent(encryptOpts),
-    process.env.CRYPTO_SEC
+    process.env.CRYPTO_SEC,
   ).toString(CryptoJS.enc.Utf8);
   let otpData;
   try {
@@ -314,7 +294,7 @@ const setEmailPassword = (model) =>
     // Decrypt the encrypted options and compare with the user-entered code
     const decrypted = CryptoJS.AES.decrypt(
       decodeURIComponent(encryptOpts),
-      process.env.CRYPTO_SEC
+      process.env.CRYPTO_SEC,
     ).toString(CryptoJS.enc.Utf8);
 
     let otpData;
@@ -348,7 +328,7 @@ const setEmailPassword = (model) =>
     // Update the user's password
     user.password = CryptoJS.AES.encrypt(
       newPassword,
-      process.env.CRYPTO_SEC
+      process.env.CRYPTO_SEC,
     ).toString();
     user.forgetPassword = null;
     await user.save();
