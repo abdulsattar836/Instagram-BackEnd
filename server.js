@@ -38,16 +38,22 @@ app.enable("trust proxy");
 // ==================================================
 // CORS
 const allowedOrigins = [
-  "https://instagram-front-end-one.vercel.app",
-  "http://localhost:3000",
+  "http://localhost:3000", // local dev
+  process.env.FRONTEND_URL, // deployed frontend from env
 ];
 
 app.use(
   cors({
     origin: (origin, callback) => {
+      // allow requests with no origin (like Postman)
       if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin)) callback(null, true);
-      else callback(new Error("Not allowed by CORS"));
+
+      // allow localhost, env frontend URL, or any vercel frontend subdomain
+      if (allowedOrigins.includes(origin) || origin.endsWith(".vercel.app")) {
+        return callback(null, true);
+      }
+
+      callback(new Error("Not allowed by CORS"));
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
